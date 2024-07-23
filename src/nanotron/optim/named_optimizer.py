@@ -46,7 +46,7 @@ class NamedOptimizer(InheritFromOtherOptimizer):
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
 
-        super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
+        super().__init__(optimizer=optimizer_builder(params, id_to_name=id_to_name), id_to_name=id_to_name)
 
     def state_dict(self) -> dict:
         optim_state_dict = super().state_dict()

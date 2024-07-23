@@ -291,12 +291,19 @@ class AdamWOptimizerArgs:
     torch_adam_is_fused: bool
     name: str = "adamW"
 
+@dataclass
+class AdamMiniOptimizerArgs:
+    adam_eps: float
+    adam_beta1: float
+    adam_beta2: float
+    name: str = "adam-mini"
+
 
 @dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 
-    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs, AdamMiniOptimizerArgs]
     zero_stage: int
     weight_decay: float
     clip_grad: Optional[float]
