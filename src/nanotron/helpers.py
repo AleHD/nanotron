@@ -23,7 +23,7 @@ from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
-from nanotron.optim.adam_mini import AdamMini
+from nanotron.optim.adam_mini import AdamMini, get_param_partitioner
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
@@ -351,19 +351,16 @@ def init_optimizer_and_grad_accumulator(
                 )
 
         elif optimizer_args.optimizer_factory.name == "adam-mini":
+            partitioner = get_param_partitioner(model.config, parallel_context.tp_pg)
 
             def optimizer(param_groups, id_to_name):
                 return AdamMini(
-                    param_groups,
-                    id_to_name,
+                    partitioner(param_groups, id_to_name),
+                    parallel_context.tp_pg,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     weight_decay=optimizer_args.weight_decay,
-                    model_sharding=False,  # TODO: support model sharding.
-                    dim=model.config.hidden_size,
-                    n_heads=model.config.num_attention_heads,
-                    n_kv_heads=model.config.num_key_value_heads,
                 )
 
         else:
