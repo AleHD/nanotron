@@ -50,13 +50,14 @@ class AdamMini(torch.optim.Optimizer):
         return loss
 
 
+# TODO: zero1
 def llama_qkv_splitter(n_local_q_heads: int, n_local_kv_heads: int, d_qk: int,
                        qkv_weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    qk_weight = qkv_weight[n_local_q_heads*d_qk + n_local_kv_heads*d_qk :, :]
-    v_weight = qkv_weight[: n_local_q_heads*d_qk + n_local_kv_heads*d_qk, :]
+    qk_weight = qkv_weight[: n_local_q_heads*d_qk + n_local_kv_heads*d_qk, :]
+    v_weight = qkv_weight[n_local_q_heads*d_qk + n_local_kv_heads*d_qk :, :]
 
     qk_weight = qk_weight.view(n_local_q_heads + n_local_kv_heads, -1)
-    v_weight = v_weight.view(n_local_kv_heads, -1)
+    #v_weight = v_weight.view(n_local_kv_heads, -1)
     return qk_weight, v_weight
 
 
@@ -87,6 +88,7 @@ def adam_mini_step(param: torch.Tensor, state: dict[str, Any], tp_pg: ProcessGro
 
     # TODO: we might want to async the all_reduces.
     # Modify either v or v_mean, depending on the density.
+    handle = None
     if dense == "row":
         assert unshardable
         tmp_lr = torch.mean(grad*grad, dim=1, keepdim=True)
@@ -96,15 +98,13 @@ def adam_mini_step(param: torch.Tensor, state: dict[str, Any], tp_pg: ProcessGro
         assert unshardable
         state["v"].mul_(beta2).addcmul_(grad, grad.conj(), value=1 - beta2)
         v_or_vmean = state["v"]
-    else:
-        if unshardable:
-            tmp_lr = torch.mean(grad*grad)
-        else:
-            tmp_lr = torch.sum(grad*grad)
-            torch.distributed.all_reduce(tmp_lr, op=torch.distributed.ReduceOp.SUM)
-            tmp_lr = tmp_lr/state["numel"]
+    elif unshardable:
+        tmp_lr = torch.mean(grad*grad)
         state["vmean"].mul_(beta2).add_(tmp_lr, alpha=1 - beta2)
         v_or_vmean = state["vmean"]
+    else:
+        tmp_lr = torch.sum(grad*grad)
+        handle = torch.distributed.all_reduce(tmp_lr, op=torch.distributed.ReduceOp.SUM, async_op=True)
 
     # Now we can proceed with every case in almost the same way.
     state["step"] += 1
@@ -113,9 +113,16 @@ def adam_mini_step(param: torch.Tensor, state: dict[str, Any], tp_pg: ProcessGro
     state["m"].lerp_(grad, 1 - beta1)
     bias_correction_1 = 1 - beta1**state["step"]
     bias_correction_2 = 1 - beta2**state["step"]
-    # h = sqrt(v/corr2) + eps
+
+    # If we are in the sharded setting, we need to wait for the reduced tmp_lr before finishing computing v_mean.
+    if not unshardable:
+        handle.wait()
+        tmp_lr = tmp_lr/state["numel"]
+        state["vmean"].mul_(beta2).add_(tmp_lr, alpha=1 - beta2)
+        v_or_vmean = state["vmean"]
+
+    # Now we can compute h = sqrt(v/corr2) + eps
     h = torch.sqrt(v_or_vmean).div_(bias_correction_2**0.5).add_(eps)
-    #h = (torch.sqrt(v_or_vmean)/bias_correction_2**0.5).add_(eps)
 
     # Apply the final update to param, using specialized functions for each case.
     # param = param - lr * m/(h*corr1)
@@ -161,8 +168,8 @@ def llama_partitioner(config: LlamaConfig, tp_pg: ProcessGroup, default_groups: 
             # TODO: Update above text.
             # TODO: Paper says that the values don't need head-wise density, but it might be worth it.
             elif "qkv_proj" in name:
-                #new_groups.append({**overrides, "dense": ("row", False), "unshardable": (True, False),
-                new_groups.append({**overrides, "dense": ("row", "row"), "unshardable": (True, True),
+                #new_groups.append({**overrides, "dense": ("row", "row"), "unshardable": (True, True),
+                new_groups.append({**overrides, "dense": ("row", False), "unshardable": (True, False),
                                    "splitter": partial(llama_qkv_splitter, n_local_q_heads, n_local_kv_heads, d_qk)})
 
                 ## We separate Q,K,V and add the value group.

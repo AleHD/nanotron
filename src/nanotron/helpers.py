@@ -351,7 +351,12 @@ def init_optimizer_and_grad_accumulator(
                 )
 
         elif optimizer_args.optimizer_factory.name == "adam-mini":
-            partitioner = get_param_partitioner(model.config, parallel_context.tp_pg)
+            # Get the model config.
+            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+                model_config = model.module.config
+            else:
+                model_config = model.config
+            partitioner = get_param_partitioner(model_config, parallel_context.tp_pg)
 
             def optimizer(param_groups, id_to_name):
                 return AdamMini(
