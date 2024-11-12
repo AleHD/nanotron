@@ -241,6 +241,8 @@ def after_optim_step_sanity_checks(
 def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):
     for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
         for name, tensor in optim_state.items():
+            if tensor is None:
+                continue
             if name == "step":
                 tensor = tensor.to("cuda")
 

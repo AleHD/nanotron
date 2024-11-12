@@ -23,6 +23,8 @@ from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
+from nanotron.optim.lion import Lion
+from nanotron.optim.ademamix import AdEMAMix
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
@@ -347,6 +349,31 @@ def init_optimizer_and_grad_accumulator(
                     param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
+                )
+            
+        elif optimizer_args.optimizer_factory.name == "lion":
+            def optimizer(param_groups):
+                return Lion(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                )    
+            
+        elif optimizer_args.optimizer_factory.name == "ademamix":
+            def optimizer(param_groups):
+                return AdEMAMix(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    betas=(
+                        optimizer_args.optimizer_factory.adema_beta1, 
+                        optimizer_args.optimizer_factory.adema_beta2, 
+                        optimizer_args.optimizer_factory.adema_beta3
+                    ),
+                    alpha=optimizer_args.optimizer_factory.adema_alpha,
+                    beta3_warmup=optimizer_args.optimizer_factory.adema_t_alpha_beta3,
+                    alpha_warmup=optimizer_args.optimizer_factory.adema_t_alpha_beta3,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adema_eps,
                 )
 
         else:
