@@ -206,6 +206,7 @@ class DistributedTrainer:
         if self.init_checkpoint_path is not None:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
+                parallel_context=self.parallel_context,
                 root_folder=self.init_checkpoint_path,
             )
 
@@ -276,7 +277,8 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                entity=self.config.general.entity,
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -442,10 +444,10 @@ class DistributedTrainer:
                     self.save_checkpoint()
 
         dist.barrier()  # let's wait for everyone before leaving
-        
+
         if self.config.checkpoints.save_final_state:
             self.save_checkpoint()
-        
+
         self.post_training()
 
     def training_step(
@@ -864,8 +866,8 @@ class DistributedTrainer:
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=bool(
-                dist.get_rank(self.parallel_context.world_pg) == 0
-            ),  # We only save the lr_scheduler on world_rank==0
+                dist.get_rank(self.parallel_context.dp_pg) == 0
+            ),  # We only save the lr_scheduler on DP==0
             should_save_config=bool(
                 dist.get_rank(self.parallel_context.world_pg) == 0
             ),  # We only save the config on world_rank==0
