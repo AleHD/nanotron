@@ -15,7 +15,7 @@
 """PyTorch LLaMa model."""
 
 from typing import Dict, Optional, Union, List
-
+from collections import defaultdict
 import torch
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
@@ -28,7 +28,7 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import TritonRMSNorm, LayerScale
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -145,6 +145,48 @@ class MLP(nn.Module):
 
         gate_up_contiguous_chunks = (
             config.intermediate_size,  # shape of gate_linear
+        )
+        self.up_proj = TensorParallelColumnLinear(
+            config.hidden_size,
+            config.intermediate_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=gate_up_contiguous_chunks,
+        )
+        self.down_proj = TensorParallelRowLinear(
+            config.intermediate_size,
+            config.hidden_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+        )
+        self.act = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.up_proj(hidden_states)
+        hidden_states = self.down_proj(self.act(merged_states))
+        return {"hidden_states": hidden_states}
+
+class GatedMLP(nn.Module):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+    ):
+        super().__init__()
+
+        # TODO @thomasw21: refactor so that we store that default in a single place.
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        gate_up_contiguous_chunks = (
+            config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
         self.gate_up_proj = TensorParallelColumnLinear(
@@ -171,7 +213,6 @@ class MLP(nn.Module):
         merged_states = self.gate_up_proj(hidden_states)
         hidden_states = self.down_proj(self.split_silu_mul(merged_states))
         return {"hidden_states": hidden_states}
-
 
 class CoreAttention(nn.Module):
     def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
@@ -334,6 +375,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.prefill_kv_len = (
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
+        if config.qknorm_type == "rmsnorm":
+            self.q_norm = TritonRMSNorm(self.d_qk, eps=config.rms_norm_eps)
+            self.k_norm = TritonRMSNorm(self.d_qk, eps=config.rms_norm_eps)
+        else:
+            self.q_norm = nn.Identity()
+            self.k_norm = nn.Identity()
 
     def forward(
         self,
@@ -377,6 +424,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
+
+        query_states = self.q_norm(query_states)
+        key_states = self.k_norm(key_states)
+
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -583,7 +634,13 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        if config.norm_type == "rmsnorm":
+            self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            self.input_layernorm = nn.Identity()
+            self.post_attention_layernorm = nn.Identity()
+
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -591,11 +648,20 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        if config.resid_gain != 1:
+            self.attn_layer_scale = LayerScale(config.hidden_size, eps=config.resid_gain)
+            self.mlp_layer_scale = LayerScale(config.hidden_size, eps=config.resid_gain)
+        else:
+            self.attn_layer_scale = nn.Identity()
+            self.mlp_layer_scale = nn.Identity()
+        
+        if config.use_gated_mlp:
+            self.mlp = GatedMLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        else:
+            self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         
         self.recompute_layer = parallel_config.recompute_layer
-        
+
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
@@ -606,12 +672,12 @@ class LlamaDecoderLayer(nn.Module):
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
-        hidden_states = hidden_states + residual
+        hidden_states = self.attn_layer_scale(hidden_states) + residual
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
-        hidden_states = hidden_states + residual
+        hidden_states = self.mlp_layer_scale(hidden_states) + residual
 
         return hidden_states, output["sequence_mask"]
         
@@ -719,13 +785,16 @@ class LlamaModel(nn.Module):
             ]
         )
 
-        self.final_layer_norm = PipelineBlock(
-            p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
-            module_input_keys={"input"},
-            module_output_keys={"hidden_states"},
-        )  # TODO
+        if config.use_final_norm:
+            self.final_layer_norm = PipelineBlock(
+                p2p=self.p2p,
+                module_builder=TritonRMSNorm,
+                module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+                module_input_keys={"input"},
+                module_output_keys={"hidden_states"},
+            )  # TODO
+        else:
+            self.final_layer_norm = lambda input: {"hidden_states": input}
 
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
@@ -770,11 +839,18 @@ class LlamaModel(nn.Module):
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
         hidden_encoder_states = {
-            "hidden_states": output["input_embeds"],
+            "hidden_states": 50 * output["input_embeds"],
             "sequence_mask": input_mask,
         }
+        self.act_metrics = defaultdict(lambda: 0)
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
+
+            with torch.no_grad():
+                act_rms = (hidden_encoder_states["hidden_states"]**2).mean().sqrt()
+                normed_acts = hidden_encoder_states["hidden_states"] / (act_rms + 1e-8)
+                self.act_metrics["avg_act_rms"] += act_rms / len(self.decoder)
+                self.act_metrics["avg_kurt"] += (normed_acts.view(-1, normed_acts.shape[-1])**2).mean(0).var() / len(self.decoder)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
@@ -893,7 +969,7 @@ class LlamaForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )["loss"]
-        return {"loss": loss}
+        return {"loss": loss, **self.model.act_metrics}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

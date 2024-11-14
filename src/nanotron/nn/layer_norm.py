@@ -51,3 +51,17 @@ class TritonRMSNorm(nn.Module):
             is_rms_norm=True,
             return_dropout_mask=return_dropout_mask,
         )
+
+class LayerScale(nn.Module):
+    def __init__(self, hidden_size, eps=1, device=None, dtype=None):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+        self.eps = eps
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.constant_(self.weight, self.eps)
+
+    def forward(self, input):
+        return self.weight * input

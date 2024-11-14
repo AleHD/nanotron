@@ -54,6 +54,11 @@ class LlamaConfig:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    norm_type: str = "rmsnorm"
+    qknorm_type: str = "none"
+    resid_gain: float = 1.
+    use_final_norm: bool = True
+    use_gated_mlp: bool = False
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it

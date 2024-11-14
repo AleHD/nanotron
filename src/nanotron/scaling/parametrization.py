@@ -4,7 +4,7 @@ from enum import Enum, auto
 from typing import Dict
 
 from nanotron.config import ModelArgs
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import TritonRMSNorm, LayerScale
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -38,6 +38,7 @@ class StandardParametrizator(Parametrizator):
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            LayerScale: self._parametrize_layer_scale
         }
 
         self.std = config.init_method.std
@@ -68,6 +69,9 @@ class StandardParametrizator(Parametrizator):
             module.weight.fill_(1)
         elif "bias" == param_name:
             module.bias.zero_()
+
+    def _parametrize_layer_scale(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight"]
 
     def _parametrize_embedding(self, param_name: str, module: nn.Module):
         assert param_name in ["weight"]

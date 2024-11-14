@@ -427,7 +427,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, kurt_avg, act_rms_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -438,7 +438,7 @@ class DistributedTrainer:
                 ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, kurt_avg=kurt_avg, act_rms_avg=act_rms_avg)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -524,10 +524,34 @@ class DistributedTrainer:
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
             # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            loss_handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             loss_avg = None
-            handle = None
+            loss_handle = None
+
+        # Compute DP average kurt and overlap with optimizer step
+        if isinstance(outputs[0]["avg_kurt"], torch.Tensor):
+            # This is an average on only one data rank.
+            kurt_avg = torch.stack(
+                [output["avg_kurt"] for output in outputs]
+            ).sum()  # already divided by n_micro_batches_per_batch
+            # sync kurt across DP
+            kurt_handle = dist.all_reduce(kurt_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+        else:
+            kurt_avg = None
+            kurt_handle = None
+
+        # Compute DP average act_rms and overlap with optimizer step
+        if isinstance(outputs[0]["avg_act_rms"], torch.Tensor):
+            # This is an average on only one data rank.
+            act_rms_avg = torch.stack(
+                [output["avg_act_rms"] for output in outputs]
+            ).sum()  # already divided by n_micro_batches_per_batch
+            # sync act_rms across DP
+            act_rms_handle = dist.all_reduce(act_rms_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+        else:
+            act_rms_avg = None
+            act_rms_handle = None
 
         # Apply gradient
         self.optimizer.step()
@@ -538,12 +562,16 @@ class DistributedTrainer:
 
         after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
-        if handle is not None:
-            handle.wait()
+        if loss_handle is not None:
+            loss_handle.wait()
+        if kurt_handle is not None:
+            kurt_handle.wait()
+        if act_rms_handle is not None:
+            act_rms_handle.wait()
 
         self.post_train_step()
 
-        return outputs, loss_avg
+        return outputs, loss_avg, kurt_avg, act_rms_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -557,6 +585,8 @@ class DistributedTrainer:
         self,
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
+        kurt_avg: Optional[torch.Tensor],
+        act_rms_avg: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
@@ -590,6 +620,8 @@ class DistributedTrainer:
                 ),  # , "1.6E"),
                 LogItem("global_batch_size", self.global_batch_size, "human_format"),  # , "5d"),
                 LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
+                LogItem("kurt_avg", kurt_avg.item(), "human_format"),  # , "1.6E"),
+                LogItem("act_rms_avg", act_rms_avg.item(), "human_format"),  # , "1.6E"),
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
