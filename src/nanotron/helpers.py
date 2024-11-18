@@ -379,7 +379,7 @@ def init_optimizer_and_grad_accumulator(
     
         elif optimizer_args.optimizer_factory.name == "SFadamW":
             def optimizer(param_groups):
-                return AdEMAMix(
+                return AdamWScheduleFree(
                     param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     betas=(
@@ -390,7 +390,7 @@ def init_optimizer_and_grad_accumulator(
                     r=optimizer_args.optimizer_factory.sf_r,
                     weight_lr_power=optimizer_args.optimizer_factory.sf_weight_lr_power,
                     weight_decay=optimizer_args.weight_decay,
-                )
+                ).train()
 
 
         else:

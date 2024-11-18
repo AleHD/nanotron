@@ -91,6 +91,7 @@ class AdamWScheduleFree(torch.optim.Optimizer):
                         # Set p to x
                         p.lerp_(end=state["z"].to(p.device), weight=1 - 1 / beta1)
                 group["train_mode"] = False
+        return self
 
     @torch.no_grad()
     def train(self):
@@ -104,6 +105,7 @@ class AdamWScheduleFree(torch.optim.Optimizer):
                         # Set p to y
                         p.lerp_(end=state["z"].to(p.device), weight=1 - beta1)
                 group["train_mode"] = True
+        return self
 
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
@@ -305,6 +307,7 @@ class SGDScheduleFree(torch.optim.Optimizer):
                         # Set p to x
                         p.lerp_(end=state["z"].to(p.device), weight=1 - 1 / momentum)
                 group["train_mode"] = False
+        return self
 
     @torch.no_grad()
     def train(self):
@@ -318,6 +321,7 @@ class SGDScheduleFree(torch.optim.Optimizer):
                         # Set p to y
                         p.lerp_(end=state["z"].to(p.device), weight=1 - momentum)
                 group["train_mode"] = True
+        return self
 
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:

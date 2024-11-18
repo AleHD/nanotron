@@ -326,7 +326,7 @@ class AdamWScheduleFreeArgs:
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 
-    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs, AdEMAMixOptimizerArgs, LionOptimizerArgs]
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs, AdEMAMixOptimizerArgs, LionOptimizerArgs, AdamWScheduleFreeArgs]
     zero_stage: int
     weight_decay: float
     clip_grad: Optional[float]
