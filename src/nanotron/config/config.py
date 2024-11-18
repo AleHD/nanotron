@@ -312,6 +312,17 @@ class LionOptimizerArgs:
 
 
 @dataclass
+class AdamWScheduleFreeArgs:
+    sf_eps: float
+    sf_beta1: float
+    sf_beta2: float
+    sf_r: float
+    sf_weight_lr_power: float
+    name: str = "SFadamW"
+
+
+
+@dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 

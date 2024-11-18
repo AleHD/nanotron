@@ -25,6 +25,7 @@ from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.lion import Lion
 from nanotron.optim.ademamix import AdEMAMix
+from nanotron.optim.sf import AdamWScheduleFree
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
@@ -375,6 +376,22 @@ def init_optimizer_and_grad_accumulator(
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.optimizer_factory.adema_eps,
                 )
+    
+        elif optimizer_args.optimizer_factory.name == "SFadamW":
+            def optimizer(param_groups):
+                return AdEMAMix(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    betas=(
+                        optimizer_args.optimizer_factory.sf_beta1, 
+                        optimizer_args.optimizer_factory.sf_beta2, 
+                    ),
+                    eps=optimizer_args.optimizer_factory.sf_eps,
+                    r=optimizer_args.optimizer_factory.sf_r,
+                    weight_lr_power=optimizer_args.optimizer_factory.sf_weight_lr_power,
+                    weight_decay=optimizer_args.weight_decay,
+                )
+
 
         else:
             raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")

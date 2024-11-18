@@ -59,6 +59,7 @@ class LlamaConfig:
     resid_gain: float = 1.
     use_final_norm: bool = True
     use_gated_mlp: bool = False
+    scale_input_embeds: float = 1.0
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it

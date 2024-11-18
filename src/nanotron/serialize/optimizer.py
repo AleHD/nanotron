@@ -96,12 +96,15 @@ def save_optimizer(
             json.dump(config, fo)
 
     # We dump the optimizer state using `torch.save`
+    if hasattr(optimizer, "eval"):
+        optimizer = optimizer.eval()
     torch.save(
         optimizer.state_dict(),
         root_folder
         / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
     )
-
+    if hasattr(optimizer, "train"):
+        optimizer = optimizer.train()
 
 def save_lr_scheduler(
     lr_scheduler,
@@ -303,6 +306,8 @@ def load_optimizer(
                     state_dict["state"][param_index][state_name] = sliced_tensor
 
     optimizer.load_state_dict(state_dict)
+    if hasattr(optimizer, "train"):
+        optimizer = optimizer.train()
 
     if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
         check_optim_state_in_sync(optimizer, parallel_context.dp_pg)

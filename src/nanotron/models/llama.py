@@ -839,7 +839,7 @@ class LlamaModel(nn.Module):
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
         hidden_encoder_states = {
-            "hidden_states": 50 * output["input_embeds"],
+            "hidden_states": self.config.scale_input_embeds * output["input_embeds"],
             "sequence_mask": input_mask,
         }
         self.act_metrics = defaultdict(lambda: 0)
