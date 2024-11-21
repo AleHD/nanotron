@@ -1,6 +1,5 @@
 #= PRELUDE: Command line utilities and handling the model size =#
-SCRIPT_VERSION=v1-debug
-TODI_GPUS=4
+SCRIPT_VERSION=v2
 
 # Print usage function.
 usage () {
@@ -8,6 +7,8 @@ usage () {
 	echo "<size>: 1/8"
 	echo "Options:"
 	echo " --help: Displays this message"
+
+	echo " --rcp: Train on rcp (otherwise todi)"
 
 	echo " --opt <adamW/ademamix/SFadamW>: Optimizer"
 	echo " --lr <lr>: Learning rate"
@@ -21,6 +22,7 @@ usage () {
 	echo " --clip <float>: Gradient clip"
 
 	echo " --extra-name <name>: Add a suffix to the name"
+	echo " --wandbid <name>: Specify wandbid"
 }
 
 if [[ $# -eq 0 ]]; then
@@ -30,47 +32,10 @@ if [[ $# -eq 0 ]]; then
 fi
 
 SEQ_LEN=8192
-if [[ $1 -eq 1 ]]; then 
-	# batch_size = ~1.31 M
-	# total_tokens = ~78.64B tokens
-	# todi time per iter (1 node): 9.6s
-	# todi ETA: 6d16h
-	BASE_CONFIG=llama3_large_baseline
-	DP=4
-	MBS=2
-	GBS=160
-	ITERS=60000
-	SIZE=1
-	SAVE_FREQ=20
-	LR=0.0006
-elif [[ $1 -eq 8 ]]; then
-	# batch_size = ~1.23M
-	# total_tokens = ~24.58B
-	# todi time per iter (1 node): 48.1s
-	# todi ETA: 11d3h
-	BASE_CONFIG=llama3_8b
-	DP=1
-	MBS=3
-	GBS=150
-	ITERS=20000
-	SIZE=8
-	SAVE_FREQ=100
-    	LR=0.0003
-else
-	echo "Invalid llama size: $1"
-	usage
-	exit 1
-fi
+SIZE=$1
 shift
-LR_WARMUP=$(( $ITERS/10 ))
 
-# Get acc from GBS.
-if (( $GBS % ($DP*$MBS) != 0 )); then
-	echo "GBS $GBS not divisible by DP*MBS $DP*$MBS"
-	exit 1
-fi
-ACC=$(( $GBS/$DP/$MBS ))
-
+RCP=false
 OPT=adamW
 CHANGED_BETA1=false
 BETA1=0.9
@@ -108,6 +73,8 @@ while [[ $# -gt 0 ]]; do
 		--help)
 			usage; exit 0;;
 
+		--rcp)
+			RCP=true; shift;;
 		--opt)
 			OPT=$2; shift 2;;
 		--lr)
@@ -131,12 +98,61 @@ while [[ $# -gt 0 ]]; do
 
 		--extra-name)
 			EXTRA_NAME="-$2"; shift 2;;
+		--wandbid)
+			WANDB_ID=$2; shift 2;;
 		*)
 			echo "Unexpected argument $1"
 			usage
 			exit 1
 	esac
 done
+
+if [[ $RCP = true ]]; then
+	GPUS=8
+else
+	GPUS=4
+fi
+
+
+if [[ $SIZE -eq 1 ]]; then 
+	# batch_size = ~0.98 M
+	# total_tokens = ~98.3B tokens
+	# rcp time per iter (1 node): 3s
+	# rcp ETA: 3d11h
+	BASE_CONFIG=llama3_large_baseline
+	DP=$GPUS
+	MBS=3
+	GBS=120
+	SAVE_FREQ=1000  # every ~50m
+	ITERS=100000
+	LR=0.0006
+elif [[ $SIZE -eq 8 ]]; then
+	# batch_size = ~1.23M
+	# total_tokens = ~24.58B
+	# todi time per iter (1 node): 48.1s
+	# todi ETA: 11d3h
+	BASE_CONFIG=llama3_8b
+	DP=$((GPUS/4))
+	MBS=3
+	GBS=150
+	ITERS=20000
+	SAVE_FREQ=500
+    	LR=0.0003
+else
+	echo "Invalid llama size: $1"
+	usage
+	exit 1
+fi
+LR_WARMUP=$(( $ITERS/10 ))
+
+# Get acc from GBS.
+if (( $GBS % ($DP*$MBS) != 0 )); then
+	echo "GBS $GBS not divisible by DP*MBS $DP*$MBS"
+	exit 1
+fi
+ACC=$(( $GBS/$DP/$MBS ))
+
+
 
 #= MIDDLE: Set up arguments depending on the commandline =#
 SUFFIX=""
@@ -240,13 +256,44 @@ SCHEDULER_ARGS+=(
 SUFFIX=$SUFFIX$EXTRA_NAME
 NAME=llama${SIZE}b$SUFFIX
 WANDB_PROJECT=optimizer_experiments_$SCRIPT_VERSION
-LOGS_ROOT=/store/swissai/a06/users/ahernnde/checkpoints/nanotron/
+
+if [[ "$WANDB_ID" = "" ]]; then
+	WANDB_ID=$NAME
+fi
 
 WANDB_ARGS=(
-	"run.env.WANDB_API_KEY=$(cat /store/swissai/a06/users/ahernnde/.keys/wandb.txt)"
-	"+run.env.WANDB_RUN_ID=$NAME"
+	"+run.env.WANDB_RUN_ID=$WANDB_ID"
 	"+run.env.WANDB_RESUME=allow"
 )
+TOKEN_ARGS=()
+SLURM_ARGS=()
+if [[ $RCP = true ]]; then
+	DATA_PATH=/mloscratch/homes/alhernan/data/tokenized/nanotron/llama_3_1/finewebedu-100B
+	NANOTRON_PATH=/mloscratch/homes/alhernan/project/workspace/nanotron
+	PRETRAIN_PATH=/mloscratch/homes/alhernan/project/workspace/pretrain
+	LOGS_ROOT=/mloscratch/homes/alhernan/checkpoints/nanotron
+else
+	DATA_PATH=/store/swissai/a06/datasets_tokenized/nanotron/Meta-Llama-3-8B/fineweb-edu-sample-100BT
+	NANOTRON_PATH=/store/swissai/a06/users/ahernnde/workspace/mpagliar-nanotron
+	PRETRAIN_PATH=/users/ahernnde/project/repos/pretrain
+	LOGS_ROOT=/store/swissai/a06/users/ahernnde/checkpoints/nanotron
+	# no need to set api keys in rcp.
+	TOKEN_ARGS+=(
+		"run.env.WANDB_API_KEY=$(cat /store/swissai/a06/users/ahernnde/.keys/wandb.txt)"
+		"run.env.HF_TOKEN=$(cat /store/swissai/a06/users/ahernnde/.keys/hf.txt)"
+	)
+	SLURM_ARGS+=(
+		"run.slurm.reservation=null"
+		"run.slurm.time=0:30:00"
+		"run.slurm.partition=debug"
+	)
+fi
+
+if [ $DP -ge 1 ]; then
+	ZERO_STAGE=1
+else
+	ZERO_STAGE=0
+fi
 
 #= WRAPPING UP: Set up the _ARGS variables that are going to be used in the end =#
 # Misc.
@@ -263,21 +310,33 @@ FINAL_ARGS=(
 	"nanotron.checkpoints.checkpoint_interval=$SAVE_FREQ"
 	"nanotron.general.project=$WANDB_PROJECT"
 	"nanotron.general.run=$NAME"
-	"run.env.HF_TOKEN=$(cat /store/swissai/a06/users/ahernnde/.keys/hf.txt)"
+	"nanotron.optimizer.zero_stage=$ZERO_STAGE"
+	"nanotron.data_stages.0.data.dataset.dataset_folder=$DATA_PATH"
+	"nanotron.parallelism.tp_linear_async_communication=true"
+	"nanotron.parallelism.tp_mode=REDUCE_SCATTER"
+	"+nanotron.parallelism.tp_recompute_allgather=false"
 	"run.paths.nanotron_logs=$LOGS_ROOT"
-	"run.paths.nanotron_src=/store/swissai/a06/users/ahernnde/workspace/mpagliar-nanotron"
-	"run.slurm.reservation=null"
-	"run.slurm.time=0:30:00"
-	"run.slurm.partition=debug"
+	"run.paths.nanotron_src=$NANOTRON_PATH"
 	"run.paths.run_ident=''"
 )
-	#"run.slurm.time=4:00:00"
 
-ARGS="${OPT_ARGS[@]} ${WANDB_ARGS[@]} ${FINAL_ARGS[@]} ${SCHEDULER_ARGS[@]}"
+ARGS="${OPT_ARGS[@]} ${WANDB_ARGS[@]} ${FINAL_ARGS[@]} ${SCHEDULER_ARGS[@]} ${TOKEN_ARGS[@]} ${SLURM_ARGS[@]}"
 
 
 #= RUNNING: Run the launcher =#
-CMD="poetry run python launcher.py $ARGS"
-echo Running command: $CMD
-echo ---
-$CMD
+if [[ $RCP = true ]]; then
+	RCP_ARGS=(
+		"run=rcp"
+		"+run.env.PYTHONPATH=/mloscratch/homes/alhernan/project/workspace/nanotron/src"
+		"nanotron.tokenizer.tokenizer_name_or_path=meta-llama/Meta-Llama-3.1-8B"
+	)
+	CMD="python $PRETRAIN_PATH/launcher.py $ARGS ${RCP_ARGS[@]}"
+	echo Running command: $CMD
+	echo ---
+	NANOTRON_LAUNCHER_DONT_SUBMIT=1 $CMD
+else
+	CMD="poetry run python $PRETRAIN_PATH/launcher.py $ARGS"
+	echo Running command: $CMD
+	echo ---
+	$CMD
+fi
