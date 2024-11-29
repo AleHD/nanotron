@@ -168,7 +168,8 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        do_compile = True
+        # do_compile = True
+        do_compile = False
         # self.split_silu_mul = torch.compile(GLUActivation(config.hidden_act))
         self.split_silu_mul = GLUActivation(config.hidden_act)
         if do_compile:

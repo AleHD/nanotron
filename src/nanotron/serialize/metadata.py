@@ -64,7 +64,7 @@ class CheckpointMetadata:
     tp: int
     dp: int
     train_meta: TrainingMetadata
-    valid_meta: TrainingMetadata
+    valid_meta: Optional[TrainingMetadata]
 
 
 @dataclasses.dataclass
@@ -130,7 +130,7 @@ def save_meta(parallel_context: ParallelContext,
               training_metadata: TrainingMetadata,
               valid_metadata: TrainingMetadata):
     assert isinstance(training_metadata, TrainingMetadata)
-    assert isinstance(valid_metadata, TrainingMetadata)
+    assert (valid_metadata is None) or isinstance(valid_metadata, TrainingMetadata)
 
     if dist.get_rank(parallel_context.world_pg) != 0:
         return

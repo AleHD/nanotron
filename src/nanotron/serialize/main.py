@@ -63,7 +63,7 @@ def save(
     sanity_checks: bool = True,
 ) -> None:
     assert isinstance(training_metadata, TrainingMetadata)
-    assert isinstance(valid_metadata, TrainingMetadata)
+    assert (valid_metadata is None) or isinstance(valid_metadata, TrainingMetadata)
 
     try:
         if should_save_config:
