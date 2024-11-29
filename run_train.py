@@ -11,7 +11,7 @@ import argparse
 from typing import Dict, cast
 
 import warnings
-warnings.filterwarnings("error")
+# warnings.filterwarnings("error")
 
 import numpy as np
 from nanotron import logging
@@ -186,8 +186,9 @@ def get_dataloader(trainer: DistributedTrainer,
                    metadata_fieldname: str) -> Dict[str, DataLoader]:
     dataloaders = {}
     data_stages = getattr(trainer.config, data_stages_fieldname)
-    if data_stages:
-        metadata = getattr(trainer, metadata_fieldname)
+    metadata = getattr(trainer, metadata_fieldname)
+
+    if data_stages and metadata:
         for stage_idx, stage in enumerate(data_stages):
             # NOTE: we only create the dataloader for the first stage,
             # then we lazy initialize the dataloader for the other stages
@@ -223,6 +224,8 @@ def get_dataloader(trainer: DistributedTrainer,
                 )
             )
             dataloaders[stage.name] = dataloader
+    else:
+        dataloaders = None
     return dataloaders
 
 

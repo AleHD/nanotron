@@ -229,7 +229,7 @@ class DistributedTrainer:
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
             assert isinstance(checkpoint_metadata.train_meta, TrainingMetadata)
-            assert isinstance(checkpoint_metadata.valid_meta, TrainingMetadata)
+            assert (checkpoint_metadata.valid_meta is None) or isinstance(checkpoint_metadata.valid_meta, TrainingMetadata)
 
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.metadata: TrainingMetadata = checkpoint_metadata.train_meta
@@ -688,7 +688,6 @@ class DistributedTrainer:
 
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
-
             lr = self.lr_scheduler.get_last_lr()[0]
 
             log_entries = [
