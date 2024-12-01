@@ -199,10 +199,10 @@ def get_dataloader(trainer: DistributedTrainer,
             ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
 
             num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
-                stage, trainer.config, metadata
+                stage, data_stages, trainer.config.tokens, metadata
             )
             log_rank(
-                f"[Training Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+                f"[{data_stages_fieldname} Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
@@ -241,8 +241,8 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    dataloader_train = get_dataloader(trainer, "data_stages", "metadata")
     dataloader_valid = get_dataloader(trainer, "valid_data_stages", "valid_metadata")
+    dataloader_train = get_dataloader(trainer, "data_stages", "metadata")
 
     # Train
     trainer.train(dataloader_train, dataloader_valid)

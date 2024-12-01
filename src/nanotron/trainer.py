@@ -194,6 +194,12 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
+        # Init learning rate scheduler
+        self.lr_scheduler = lr_scheduler_builder(
+            optimizer=self.optimizer,
+            lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
+            total_training_steps=self.config.tokens.train_steps,
+        )
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -203,12 +209,6 @@ class DistributedTrainer:
                 model=self.model,
             )
 
-        # Init learning rate scheduler
-        self.lr_scheduler = lr_scheduler_builder(
-            optimizer=self.optimizer,
-            lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
-            total_training_steps=self.config.tokens.train_steps,
-        )
         if self.init_checkpoint_path is not None:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
@@ -331,7 +331,7 @@ class DistributedTrainer:
 
     def _clear_dataloader_from_memory(self, dataloader: DataLoader, stage_name: str):
         log_rank(
-            f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
+            f"[Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
             logger=logger,
             level=logging.INFO,
         )
@@ -390,14 +390,13 @@ class DistributedTrainer:
                         self._clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
                 self.metadata.last_stage_idx = stage_idx
-
                 if is_resume_from_training:
                     remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
-                        stage, self.config, self.metadata
+                        stage, self.config.data_stages, self.config.tokens, self.metadata
                     )
                     consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
                     log_rank(
-                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        f"[Train] Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
                         logger=logger,
                         level=logging.INFO,
                         rank=0,
@@ -455,6 +454,18 @@ class DistributedTrainer:
                         self._clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
                 self.valid_metadata.last_stage_idx = stage_idx
+
+                if is_resume_from_training:
+                    remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
+                        stage, self.config.valid_data_stages, self.config.tokens, self.valid_metadata
+                    )
+                    consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.valid_metadata)
+                    log_rank(
+                        f"[Valid] Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
                 # print(f"{self.iteration_step } -> changing dataloader to '{stage.name}'")
                 dataloader = dataloaders[stage.name]
                 dataloader = dataloader() if callable(dataloader) else dataloader

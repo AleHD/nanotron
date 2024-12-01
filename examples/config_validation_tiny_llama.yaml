@@ -15,7 +15,7 @@ data_stages:
       text_column_name: text
     num_loading_workers: 1
     seed: 42
-  name: Stable Training Stage
+  name: Training1
   start_training_step: 1
 - data:
     dataset:
@@ -27,8 +27,20 @@ data_stages:
       text_column_name: text
     num_loading_workers: 1
     seed: 42
-  name: Annealing Phase
-  start_training_step: 10
+  name: Training2
+  start_training_step: 12
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: stas/openwebtext-10k
+      hf_dataset_splits: train
+      text_column_name: text
+    num_loading_workers: 1
+    seed: 42
+  name: Training3
+  start_training_step: 50
 valid_data_stages:
 - data:
     dataset:
@@ -40,7 +52,7 @@ valid_data_stages:
       text_column_name: text
     num_loading_workers: 1
     seed: 42
-  name: Stable Training Stage
+  name: Valid1
   start_training_step: 1
 - data:
     dataset:
@@ -52,8 +64,20 @@ valid_data_stages:
       text_column_name: text
     num_loading_workers: 1
     seed: 42
-  name: Annealing Phase
-  start_training_step: 8
+  name: Valid2
+  start_training_step: 26
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: stas/oscar-en-10k
+      hf_dataset_splits: train
+      text_column_name: text
+    num_loading_workers: 1
+    seed: 42
+  name: Valid3
+  start_training_step: 38
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
@@ -130,5 +154,5 @@ tokens:
   limit_val_batches: 5
   micro_batch_size: 2
   sequence_length: 256
-  train_steps: 200
-  val_check_interval: 5
+  train_steps: 100
+  val_check_interval: 1
