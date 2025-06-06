@@ -21,7 +21,7 @@ class ParallelContext:
     ):
         """Initialize parallel context."""
         world_size = int(os.environ["WORLD_SIZE"])
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "8")) if world_size > 8 else world_size
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", str(world_size)))  # If no LOCAL_WORLD_SIZE is specified, assume single node training.
 
         assert (
             tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size
@@ -70,7 +70,7 @@ class ParallelContext:
         )
         self.world_ranks_to_pg = {}
         self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
-        assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
+        assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), f"Local rank mismatch"
 
         # Relevant process groups containing the current rank
         self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size)))
